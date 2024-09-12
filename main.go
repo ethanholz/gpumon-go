@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -10,6 +11,10 @@ import (
 	"time"
 
 	"github.com/NVIDIA/go-nvml/pkg/nvml"
+	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/config"
+	"github.com/aws/aws-sdk-go-v2/service/cloudwatch"
+	"github.com/aws/aws-sdk-go-v2/service/cloudwatch/types"
 )
 
 type Device struct {
@@ -23,7 +28,7 @@ type Metrics struct {
 	Power       float32 `json:"power"`
 	GpuUsage    uint    `json:"gpu_usage"`
 	MemoryTotal float32 `json:"memory_total"`
-	MemoryUsed  float32 `json:"memory_available"`
+	MemoryUsed  float32 `json:"memory_used"`
 }
 
 func (m Metrics) String() string {
@@ -101,13 +106,81 @@ func (d Device) GetMetrics() (Metrics, error) {
 	return Metrics{Temperature: temp, Power: power, GpuUsage: gpu, MemoryTotal: totalMemory, MemoryUsed: usedMemory}, nil
 }
 
+func (m Metrics) PublishCloudwatchMetrics(ctx context.Context, client *cloudwatch.Client, instanceID string, instanceType string, resolution int32, namespace string) error {
+	// Define the dimensions for the metric data
+	dimensions := []types.Dimension{
+		{
+			Name:  aws.String("InstancesId"),
+			Value: aws.String(instanceID),
+		},
+		{
+			Name:  aws.String("InstanceType"),
+			Value: aws.String(instanceType),
+		},
+	}
+
+	// Define the metric data to be published
+	metricData := []types.MetricDatum{
+		{
+			MetricName:        aws.String("GPU Usage"),
+			Dimensions:        dimensions,
+			Unit:              types.StandardUnitPercent,
+			StorageResolution: aws.Int32(resolution),
+			Value:             aws.Float64(float64(m.GpuUsage)),
+		},
+		{
+			MetricName: aws.String("Memory Used"),
+			Dimensions: dimensions,
+			// TODO: Double check the units reported by the NVML library
+			Unit:              types.StandardUnitMegabytes,
+			StorageResolution: aws.Int32(resolution),
+			Value:             aws.Float64(float64(m.MemoryUsed)),
+		},
+		{
+			MetricName:        aws.String("Temperature (C)"),
+			Dimensions:        dimensions,
+			Unit:              types.StandardUnitNone,
+			StorageResolution: aws.Int32(resolution),
+			Value:             aws.Float64(float64(m.Temperature)),
+		},
+		{
+			MetricName:        aws.String("Power (W)"),
+			Dimensions:        dimensions,
+			Unit:              types.StandardUnitNone,
+			StorageResolution: aws.Int32(resolution),
+			Value:             aws.Float64(float64(m.Power)),
+		},
+	}
+	input := &cloudwatch.PutMetricDataInput{
+		MetricData: metricData,
+		Namespace:  aws.String(namespace),
+	}
+
+	// Publish the metrics to CloudWatch
+	_, err := client.PutMetricData(ctx, input)
+	if err != nil {
+		return fmt.Errorf("Unable to publish metrics to CloudWatch: %v", err)
+	}
+
+	return nil
+}
+
 func main() {
+	// We setup a signal handler to catch SIGINT and SIGTERM signals
 	c := make(chan os.Signal)
 	signal.Notify(c, os.Interrupt, syscall.SIGTERM)
 	go func() {
 		<-c
 		os.Exit(1)
 	}()
+
+	ctx := context.Background()
+	// We initialize the AWS config
+	cfg, err := config.LoadDefaultConfig(ctx)
+	if err != nil {
+		log.Fatalf("Unable to load AWS config: %v", err)
+	}
+	cw := cloudwatch.NewFromConfig(cfg)
 
 	ret := nvml.Init()
 	if ret != nvml.SUCCESS {
