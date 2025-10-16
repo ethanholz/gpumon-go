@@ -4,9 +4,9 @@ go 1.22.5
 
 require (
 	github.com/NVIDIA/go-nvml v0.12.4-1
-	github.com/aws/aws-sdk-go-v2 v1.39.0
-	github.com/aws/aws-sdk-go-v2/config v1.31.8
-	github.com/aws/aws-sdk-go-v2/service/cloudwatch v1.50.1
+	github.com/aws/aws-sdk-go-v2 v1.39.3
+	github.com/aws/aws-sdk-go-v2/config v1.31.13
+	github.com/aws/aws-sdk-go-v2/service/cloudwatch v1.51.2
 )
 
 require (
